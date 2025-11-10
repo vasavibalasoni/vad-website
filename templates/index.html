@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid VAD Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 40px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+        }
+        
+        .upload-section {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 10px;
+            border: 2px dashed #dee2e6;
+        }
+        
+        .results-section {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        input[type="file"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            background: #f8f9fa;
+            cursor: pointer;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .range-value {
+            text-align: center;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .results {
+            display: none;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        
+        .segments {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        
+        .segment-item {
+            background: white;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .segment-speech {
+            border-left-color: #28a745;
+        }
+        
+        .segment-silence {
+            border-left-color: #dc3545;
+        }
+        
+        .visualization {
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .visualization img {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎵 Hybrid VAD Analyzer</h1>
+            <p>Upload an audio file to detect speech and silence segments using advanced AI</p>
+        </div>
+        
+        <div class="content">
+            <div class="upload-section">
+                <h2>Upload Audio</h2>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="audioFile">Select Audio File:</label>
+                        <input type="file" id="audioFile" name="audio_file" accept=".wav,.mp3,.m4a,.flac" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="threshold">Detection Threshold: <span id="thresholdValue">0.5</span></label>
+                        <input type="range" id="threshold" name="threshold" min="0.1" max="0.9" step="0.05" value="0.5">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="minDuration">Minimum Segment Duration (seconds): <span id="durationValue">0.1</span></label>
+                        <input type="range" id="minDuration" name="min_duration" min="0.05" max="0.5" step="0.05" value="0.1">
+                    </div>
+                    
+                    <button type="submit" class="btn" id="analyzeBtn">Analyze Audio</button>
+                </form>
+                
+                <div class="loading" id="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Analyzing audio... This may take a few moments.</p>
+                </div>
+                
+                <div class="error" id="error"></div>
+            </div>
+            
+            <div class="results-section">
+                <h2>Analysis Results</h2>
+                <div id="results" class="results">
+                    <div class="stats">
+                        <div class="stat-card">
+                            <div class="stat-value" id="speechRatio">0%</div>
+                            <div class="stat-label">Speech Ratio</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalDuration">0s</div>
+                            <div class="stat-label">Total Duration</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="speechDuration">0s</div>
+                            <div class="stat-label">Speech Duration</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="silenceDuration">0s</div>
+                            <div class="stat-label">Silence Duration</div>
+                        </div>
+                    </div>
+                    
+                    <h3>Segments</h3>
+                    <div class="segments" id="segmentsList"></div>
+                    
+                    <div class="visualization">
+                        <h3>Visualization</h3>
+                        <img id="plotImage" src="" alt="VAD Analysis Plot">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Update range values
+        document.getElementById('threshold').addEventListener('input', function() {
+            document.getElementById('thresholdValue').textContent = this.value;
+        });
+        
+        document.getElementById('minDuration').addEventListener('input', function() {
+            document.getElementById('durationValue').textContent = this.value;
+        });
+        
+        // Handle form submission
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            
+            // Reset UI
+            error.style.display = 'none';
+            results.style.display = 'none';
+            analyzeBtn.disabled = true;
+            loading.style.display = 'block';
+            
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayResults(data.results);
+                    document.getElementById('plotImage').src = '/plot?' + new Date().getTime();
+                    results.style.display = 'block';
+                } else {
+                    showError(data.error);
+                }
+            } catch (err) {
+                showError('Network error: ' + err.message);
+            } finally {
+                analyzeBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+        
+        function displayResults(results) {
+            // Update statistics
+            document.getElementById('speechRatio').textContent = 
+                (results.speech_ratio * 100).toFixed(1) + '%';
+            document.getElementById('totalDuration').textContent = 
+                results.total_duration.toFixed(2) + 's';
+            document.getElementById('speechDuration').textContent = 
+                results.speech_duration.toFixed(2) + 's';
+            document.getElementById('silenceDuration').textContent = 
+                results.silence_duration.toFixed(2) + 's';
+            
+            // Display segments
+            const segmentsList = document.getElementById('segmentsList');
+            segmentsList.innerHTML = '';
+            
+            results.segments.forEach(segment => {
+                const segmentDiv = document.createElement('div');
+                segmentDiv.className = `segment-item segment-${segment.label}`;
+                
+                segmentDiv.innerHTML = `
+                    <strong>${segment.label.toUpperCase()}</strong><br>
+                    Time: ${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s<br>
+                    Duration: ${(segment.end - segment.start).toFixed(2)}s<br>
+                    Confidence: ${(segment.confidence * 100).toFixed(1)}%
+                `;
+                
+                segmentsList.appendChild(segmentDiv);
+            });
+        }
+        
+        function showError(message) {
+            const error = document.getElementById('error');
+            error.textContent = message;
+            error.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
