@@ -1,3 +1,11 @@
+import os
+# Fix for Streamlit deployment
+os.environ['MPLCONFIGDIR'] = '/tmp/.matplotlib'
+
+import streamlit as st
+import numpy as np
+import torch
+# ... rest of your code
 import streamlit as st
 import numpy as np
 import torch
