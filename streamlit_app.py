@@ -5,7 +5,7 @@ import librosa
 import matplotlib.pyplot as plt
 import tempfile
 import os
-from sklearn.preprocessing import StandardScaler  # CORRECT: Use StandardScaler directly
+from joblib import load
 import json
 import torch.nn as nn
 import torch.nn.functional as F
@@ -63,34 +63,25 @@ class HybridVADAnalyzer:
         self.load_models()
     
     def load_models(self):
-        try:
-            with open(f"{self.model_dir}/hybrid_config.json", "r") as f:
-                config = json.load(f)
-            self.win_ctx = config["win_ctx"]
-            self.n_feats = config["n_feats"]
-            self.win_total = 2 * self.win_ctx + 1
-            self.flat_dim = self.win_total * self.n_feats
-            
-            # CORRECT: Create new scaler instead of loading old one
-            self.scaler = StandardScaler()
-            
-            self.bdnn = BDNN_Head(in_dim=self.flat_dim)
-            self.cnn = CNN_VAD()
-            self.meta = MetaMLP()
-            
-            self.bdnn.load_state_dict(torch.load(f"{self.model_dir}/bdnn.pth", map_location=self.device))
-            self.cnn.load_state_dict(torch.load(f"{self.model_dir}/cnn.pth", map_location=self.device))
-            self.meta.load_state_dict(torch.load(f"{self.model_dir}/meta.pth", map_location=self.device))
-            
-            self.bdnn.to(self.device).eval()
-            self.cnn.to(self.device).eval()
-            self.meta.to(self.device).eval()
-            
-            st.success("✅ Hybrid VAD model loaded successfully")
-            
-        except Exception as e:
-            st.error(f"❌ Error loading model: {e}")
-            raise
+        with open(f"{self.model_dir}/hybrid_config.json", "r") as f:
+            config = json.load(f)
+        self.win_ctx = config["win_ctx"]
+        self.n_feats = config["n_feats"]
+        self.win_total = 2 * self.win_ctx + 1
+        self.flat_dim = self.win_total * self.n_feats
+        
+        self.scaler = load(f"{self.model_dir}/scaler_ctx.joblib")
+        self.bdnn = BDNN_Head(in_dim=self.flat_dim)
+        self.cnn = CNN_VAD()
+        self.meta = MetaMLP()
+        
+        self.bdnn.load_state_dict(torch.load(f"{self.model_dir}/bdnn.pth", map_location=self.device))
+        self.cnn.load_state_dict(torch.load(f"{self.model_dir}/cnn.pth", map_location=self.device))
+        self.meta.load_state_dict(torch.load(f"{self.model_dir}/meta.pth", map_location=self.device))
+        
+        self.bdnn.to(self.device).eval()
+        self.cnn.to(self.device).eval()
+        self.meta.to(self.device).eval()
 
     def extract_features(self, audio_path):
         y, sr = librosa.load(audio_path, sr=16000)
@@ -111,9 +102,6 @@ class HybridVADAnalyzer:
     def predict_vad(self, audio_path, threshold=0.5, min_duration=0.1):
         features, sr, audio_data = self.extract_features(audio_path)
         features_ctx = self.add_context(features)
-        
-        # CORRECT: Fit scaler on current audio features
-        self.scaler.fit(features_ctx)
         features_scaled = self.scaler.transform(features_ctx)
         
         features_flat = torch.tensor(features_scaled, dtype=torch.float32).to(self.device)
