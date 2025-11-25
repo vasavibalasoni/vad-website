@@ -5,7 +5,7 @@ import librosa
 import matplotlib.pyplot as plt
 import tempfile
 import os
-from joblib import load
+from sklearn.preprocessing import StandardScaler  # CHANGED: Import StandardScaler directly
 import json
 import torch.nn as nn
 import torch.nn.functional as F
@@ -70,7 +70,9 @@ class HybridVADAnalyzer:
         self.win_total = 2 * self.win_ctx + 1
         self.flat_dim = self.win_total * self.n_feats
         
-        self.scaler = load(f"{self.model_dir}/scaler_ctx.joblib")
+        # FIX: Create new scaler instead of loading the old one
+        self.scaler = StandardScaler()
+        
         self.bdnn = BDNN_Head(in_dim=self.flat_dim)
         self.cnn = CNN_VAD()
         self.meta = MetaMLP()
@@ -102,6 +104,9 @@ class HybridVADAnalyzer:
     def predict_vad(self, audio_path, threshold=0.5, min_duration=0.1):
         features, sr, audio_data = self.extract_features(audio_path)
         features_ctx = self.add_context(features)
+        
+        # FIX: Fit the scaler on current audio features instead of using pre-trained scaler
+        self.scaler.fit(features_ctx)
         features_scaled = self.scaler.transform(features_ctx)
         
         features_flat = torch.tensor(features_scaled, dtype=torch.float32).to(self.device)
