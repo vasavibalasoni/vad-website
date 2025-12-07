@@ -135,38 +135,66 @@ class HybridVADAnalyzer:
             start_time = float(times[0])
             start_idx = 0
             
+            # First pass: Collect all potential segment boundaries
+            boundaries = []
             for i in range(1, len(final_probs)):
                 new_label = "silence" if final_probs[i] < threshold else "speech"
                 if new_label != current_label:
-                    duration = times[i] - start_time
-                    if duration >= min_duration:
-                        # Calculate confidence correctly
-                        segment_probs = final_probs[start_idx:i]
-                        confidence = float(np.mean(segment_probs))
-                        
-                        segments.append({
-                            'start': float(start_time),
-                            'end': float(times[i]),
-                            'label': current_label,
-                            'confidence': confidence
-                        })
-                    
-                    start_time = times[i]
-                    start_idx = i
+                    boundaries.append(i)
                     current_label = new_label
             
-            # Final segment
-            duration = times[-1] - start_time
-            if duration >= min_duration:
-                segment_probs = final_probs[start_idx:len(final_probs)]
-                confidence = float(np.mean(segment_probs))
+            # Second pass: Merge short segments
+            boundaries.append(len(final_probs))  # Add end boundary
+            seg_start_idx = 0
+            
+            for i, boundary in enumerate(boundaries):
+                seg_end_idx = boundary
+                seg_start_time = times[seg_start_idx]
+                seg_end_time = times[seg_end_idx]
+                duration = seg_end_time - seg_start_time
                 
-                segments.append({
-                    'start': float(start_time),
-                    'end': float(times[-1]),
-                    'label': current_label,
-                    'confidence': confidence
-                })
+                # Get label for this segment
+                seg_label = "silence" if final_probs[seg_start_idx] < threshold else "speech"
+                
+                # Only create segment if duration is sufficient
+                if duration >= min_duration:
+                    # Calculate confidence using 100 fps conversion like Colab
+                    start_frame = int(seg_start_time * 100)
+                    end_frame = int(seg_end_time * 100)
+                    start_frame = min(start_frame, len(final_probs))
+                    end_frame = min(end_frame, len(final_probs))
+                    segment_probs = final_probs[start_frame:end_frame]
+                    confidence = float(np.mean(segment_probs)) if len(segment_probs) > 0 else 0.0
+                    
+                    segments.append({
+                        'start': float(seg_start_time),
+                        'end': float(seg_end_time),
+                        'label': seg_label,
+                        'confidence': confidence
+                    })
+                    seg_start_idx = seg_end_idx
+            
+            # Handle the final segment
+            if seg_start_idx < len(final_probs):
+                seg_start_time = times[seg_start_idx]
+                seg_end_time = times[-1]
+                duration = seg_end_time - seg_start_time
+                
+                if duration >= min_duration:
+                    seg_label = "silence" if final_probs[seg_start_idx] < threshold else "speech"
+                    start_frame = int(seg_start_time * 100)
+                    end_frame = int(seg_end_time * 100)
+                    start_frame = min(start_frame, len(final_probs))
+                    end_frame = min(end_frame, len(final_probs))
+                    segment_probs = final_probs[start_frame:end_frame]
+                    confidence = float(np.mean(segment_probs)) if len(segment_probs) > 0 else 0.0
+                    
+                    segments.append({
+                        'start': float(seg_start_time),
+                        'end': float(seg_end_time),
+                        'label': seg_label,
+                        'confidence': confidence
+                    })
         
         # Calculate statistics
         if segments:
@@ -196,7 +224,7 @@ st.markdown("Upload an audio file to detect speech and silence segments using ad
 with st.sidebar:
     st.header("Settings")
     threshold = st.slider("Detection Threshold", 0.1, 0.9, 0.5, 0.05)
-    min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.1, 0.05)
+    min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.15, 0.05)  # Changed default to 0.15s
     
     st.header("About")
     st.markdown("""
