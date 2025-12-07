@@ -9,7 +9,7 @@ from joblib import load
 import json
 import torch.nn as nn
 import torch.nn.functional as F
-import warnings  # ADDED: To suppress version warnings
+import warnings
 
 # Fix for deployment
 os.environ['MPLCONFIGDIR'] = '/tmp/.matplotlib'
@@ -78,7 +78,7 @@ class HybridVADAnalyzer:
             self.win_total = 2 * self.win_ctx + 1
             self.flat_dim = self.win_total * self.n_feats
             
-            # Use the pre-trained scaler (gives better segments)
+            # Use the pre-trained scaler
             self.scaler = load(f"{self.model_dir}/scaler_ctx.joblib")
             
             self.bdnn = BDNN_Head(in_dim=self.flat_dim)
@@ -113,7 +113,7 @@ class HybridVADAnalyzer:
         features, sr, audio_data = self.extract_features(audio_path)
         features_ctx = self.add_context(features)
         
-        # Use pre-trained scaler (gives cleaner segments)
+        # Use pre-trained scaler
         features_scaled = self.scaler.transform(features_ctx)
         
         features_flat = torch.tensor(features_scaled, dtype=torch.float32).to(self.device)
@@ -125,52 +125,65 @@ class HybridVADAnalyzer:
             meta_input = torch.tensor(np.column_stack([bdnn_probs, cnn_probs]), dtype=torch.float32).to(self.device)
             final_probs = self.meta(meta_input).cpu().numpy()
         
-        times = librosa.frames_to_time(range(len(final_probs)), sr=sr, hop_length=160)
+        # Calculate time array correctly
+        hop_length = 160
+        times = librosa.frames_to_time(range(len(final_probs)), sr=sr, hop_length=hop_length)
+        
         segments = []
         if len(final_probs) > 0:
             current_label = "silence" if final_probs[0] < threshold else "speech"
             start_time = float(times[0])
+            start_idx = 0
             
             for i in range(1, len(final_probs)):
                 new_label = "silence" if final_probs[i] < threshold else "speech"
                 if new_label != current_label:
                     duration = times[i] - start_time
                     if duration >= min_duration:
-                        start_frame = int(start_time * 100)
-                        end_frame = int(times[i] * 100)
-                        segment_probs = final_probs[start_frame:end_frame]
-                        confidence = float(np.mean(segment_probs)) if len(segment_probs) > 0 else 0.0
+                        # Calculate confidence correctly
+                        segment_probs = final_probs[start_idx:i]
+                        confidence = float(np.mean(segment_probs))
                         
                         segments.append({
-                            'start': float(start_time), 'end': float(times[i]),
-                            'label': current_label, 'confidence': confidence
+                            'start': float(start_time),
+                            'end': float(times[i]),
+                            'label': current_label,
+                            'confidence': confidence
                         })
-                        start_time = times[i]
-                        current_label = new_label
+                    
+                    start_time = times[i]
+                    start_idx = i
+                    current_label = new_label
             
             # Final segment
             duration = times[-1] - start_time
             if duration >= min_duration:
-                start_frame = int(start_time * 100)
-                end_frame = int(times[-1] * 100)
-                segment_probs = final_probs[start_frame:end_frame]
-                confidence = float(np.mean(segment_probs)) if len(segment_probs) > 0 else 0.0
+                segment_probs = final_probs[start_idx:len(final_probs)]
+                confidence = float(np.mean(segment_probs))
                 
                 segments.append({
-                    'start': float(start_time), 'end': float(times[-1]),
-                    'label': current_label, 'confidence': confidence
+                    'start': float(start_time),
+                    'end': float(times[-1]),
+                    'label': current_label,
+                    'confidence': confidence
                 })
         
-        speech_time = sum(s['end']-s['start'] for s in segments if s['label'] == 'speech')
-        total_time = segments[-1]['end'] if segments else 0
-        speech_ratio = speech_time / total_time if total_time > 0 else 0
+        # Calculate statistics
+        if segments:
+            speech_time = sum(s['end']-s['start'] for s in segments if s['label'] == 'speech')
+            total_time = segments[-1]['end']
+            speech_ratio = speech_time / total_time if total_time > 0 else 0
+        else:
+            speech_time = total_time = speech_ratio = 0
         
         return {
             'segments': segments,
             'speech_ratio': speech_ratio,
             'total_duration': total_time,
             'speech_duration': speech_time,
-            'silence_duration': total_time - speech_time
+            'silence_duration': total_time - speech_time,
+            'probabilities': final_probs,
+            'times': times
         }
 
 # Streamlit UI
@@ -184,6 +197,14 @@ with st.sidebar:
     st.header("Settings")
     threshold = st.slider("Detection Threshold", 0.1, 0.9, 0.5, 0.05)
     min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.1, 0.05)
+    
+    st.header("About")
+    st.markdown("""
+    This app uses a hybrid AI model combining:
+    - BDNN (Bidirectional Deep Neural Network)
+    - CNN (Convolutional Neural Network)
+    - Meta Classifier (for final decision)
+    """)
 
 # File upload
 uploaded_file = st.file_uploader("Choose an audio file", type=['wav', 'mp3', 'm4a', 'flac'])
@@ -200,7 +221,7 @@ if uploaded_file is not None:
             analyzer = HybridVADAnalyzer()
             results = analyzer.predict_vad(tmp_path, threshold, min_duration)
             
-            # Display results
+            # Display statistics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Speech Ratio", f"{results['speech_ratio']:.1%}")
@@ -211,35 +232,154 @@ if uploaded_file is not None:
             with col4:
                 st.metric("Silence Duration", f"{results['silence_duration']:.2f}s")
             
-            # Display segments
-            st.subheader("Segments")
-            for i, seg in enumerate(results['segments']):
-                color = "🟢" if seg['label'] == 'speech' else "🔴"
-                st.write(f"{color} **{seg['label'].upper()}** | "
-                        f"Time: {seg['start']:.2f}s - {seg['end']:.2f}s | "
-                        f"Duration: {seg['end']-seg['start']:.2f}s | "
-                        f"Confidence: {seg['confidence']:.1%}")
+            # Display segments in an expandable table
+            st.subheader("Detected Segments")
+            
+            # Create a table view
+            if results['segments']:
+                segments_data = []
+                for i, seg in enumerate(results['segments']):
+                    segments_data.append({
+                        'Segment': i+1,
+                        'Type': '🎤 SPEECH' if seg['label'] == 'speech' else '🔇 SILENCE',
+                        'Start (s)': f"{seg['start']:.2f}",
+                        'End (s)': f"{seg['end']:.2f}",
+                        'Duration (s)': f"{seg['end']-seg['start']:.2f}",
+                        'Confidence': f"{seg['confidence']:.1%}"
+                    })
+                
+                st.dataframe(segments_data, use_container_width=True)
+                
+                # Show detailed view
+                with st.expander("View Detailed Segment Information"):
+                    for i, seg in enumerate(results['segments']):
+                        color = "🟢" if seg['label'] == 'speech' else "🔴"
+                        st.write(f"{color} **{seg['label'].upper()}** | "
+                                f"Time: {seg['start']:.2f}s - {seg['end']:.2f}s | "
+                                f"Duration: {seg['end']-seg['start']:.2f}s | "
+                                f"Confidence: {seg['confidence']:.1%}")
+            else:
+                st.info("No segments detected with current settings.")
             
             # Visualization
-            st.subheader("Waveform Visualization")
-            y, sr = librosa.load(tmp_path)
-            fig, ax = plt.subplots(figsize=(12, 3))
-            librosa.display.waveshow(y, sr=sr, alpha=0.7, color='blue', ax=ax)
+            st.subheader("Visualization")
             
-            for seg in results['segments']:
-                color = 'green' if seg['label'] == 'speech' else 'red'
-                ax.axvspan(seg['start'], seg['end'], color=color, alpha=0.3)
+            # Create two tabs for different visualizations
+            tab1, tab2 = st.tabs(["Waveform with Segments", "Probability Plot"])
             
-            ax.set_title("Voice Activity Detection Results")
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel("Amplitude")
-            st.pyplot(fig)
+            with tab1:
+                # Waveform with segments
+                y, sr = librosa.load(tmp_path)
+                fig1, ax1 = plt.subplots(figsize=(12, 3))
+                librosa.display.waveshow(y, sr=sr, alpha=0.7, color='blue', ax=ax1)
+                
+                for seg in results['segments']:
+                    color = 'green' if seg['label'] == 'speech' else 'red'
+                    ax1.axvspan(seg['start'], seg['end'], color=color, alpha=0.3, label=seg['label'].capitalize())
+                
+                # Remove duplicate labels
+                handles, labels = ax1.get_legend_handles_labels()
+                by_label = dict(zip(labels, handles))
+                if by_label:
+                    ax1.legend(by_label.values(), by_label.keys())
+                
+                ax1.set_title("Voice Activity Detection Results")
+                ax1.set_xlabel("Time (s)")
+                ax1.set_ylabel("Amplitude")
+                st.pyplot(fig1)
+            
+            with tab2:
+                # Probability plot
+                fig2, ax2 = plt.subplots(figsize=(12, 3))
+                ax2.plot(results['times'], results['probabilities'], 'b-', alpha=0.7, label='Speech Probability')
+                ax2.axhline(y=threshold, color='r', linestyle='--', alpha=0.5, label=f'Threshold ({threshold})')
+                
+                # Highlight segments
+                for seg in results['segments']:
+                    if seg['label'] == 'speech':
+                        ax2.axvspan(seg['start'], seg['end'], color='green', alpha=0.2)
+                    else:
+                        ax2.axvspan(seg['start'], seg['end'], color='red', alpha=0.2)
+                
+                ax2.set_title("Speech Probability over Time")
+                ax2.set_xlabel("Time (s)")
+                ax2.set_ylabel("Probability")
+                ax2.set_ylim([0, 1])
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+                st.pyplot(fig2)
+            
+            # Download results
+            st.subheader("Export Results")
+            
+            # Create JSON for download
+            results_json = {
+                'settings': {
+                    'threshold': threshold,
+                    'min_duration': min_duration
+                },
+                'statistics': {
+                    'speech_ratio': results['speech_ratio'],
+                    'total_duration': results['total_duration'],
+                    'speech_duration': results['speech_duration'],
+                    'silence_duration': results['silence_duration']
+                },
+                'segments': results['segments']
+            }
+            
+            import json as json_module
+            json_str = json_module.dumps(results_json, indent=2)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📥 Download Results (JSON)",
+                    data=json_str,
+                    file_name="vad_results.json",
+                    mime="application/json"
+                )
+            
+            with col2:
+                # Create CSV
+                import pandas as pd
+                if results['segments']:
+                    df = pd.DataFrame(results['segments'])
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Results (CSV)",
+                        data=csv,
+                        file_name="vad_results.csv",
+                        mime="text/csv"
+                    )
             
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
+            st.error("Please ensure your model files are in the 'hybrid_model' directory.")
         finally:
             # Clean up
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+else:
+    # Show example when no file is uploaded
+    st.info("👆 Please upload an audio file to begin analysis.")
+    
+    # Show example structure
+    with st.expander("ℹ️ Expected Model File Structure"):
+        st.code("""
+your_app_directory/
+├── streamlit_app.py
+├── requirements.txt
+├── README.md
+└── hybrid_model/
+    ├── hybrid_config.json
+    ├── scaler_ctx.joblib
+    ├── bdnn.pth
+    ├── cnn.pth
+    └── meta.pth
+        """)
 
 st.markdown("---")
-st.markdown("Powered by Hybrid VAD Model | Built with Streamlit")
+st.markdown("### 🚀 Powered by Hybrid VAD Model | Built with Streamlit")
