@@ -5,7 +5,7 @@ import librosa
 import matplotlib.pyplot as plt
 import tempfile
 import os
-from joblit import load
+from joblib import load
 import json
 import torch.nn as nn
 import torch.nn.functional as F
