@@ -427,4 +427,4 @@ else:
         """)
 
 st.markdown("---")
-st.markdown("### 🚀 Powered by Hybrid VAD Model | Built with Streamlit")
+st.markdown("### Powered by Hybrid VAD Model | Built with Streamlit")
