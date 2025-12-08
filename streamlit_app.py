@@ -426,20 +426,7 @@ else:
     # Show instructions when no file is uploaded
     st.info("👆 Please upload an audio file to begin analysis.")
     
-    # Show example structure
-    with st.expander("📁 Expected File Structure"):
-        st.code("""
-your_app_directory/
-├── streamlit_app.py
-├── requirements.txt
-├── README.md
-└── hybrid_model/
-    ├── hybrid_config.json
-    ├── scaler_ctx.joblib
-    ├── bdnn.pth
-    ├── cnn.pth
-    └── meta.pth
-        """)
+    
     
     with st.expander("🎯 How to Use"):
         st.markdown("""
