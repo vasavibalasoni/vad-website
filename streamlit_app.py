@@ -19,6 +19,127 @@ os.environ['MPLCONFIGDIR'] = '/tmp/.matplotlib'
 # Suppress warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
+# ========== ADD CUSTOM CSS FOR COLORFUL METRICS ==========
+st.markdown("""
+<style>
+    /* Colorful metrics styling */
+    .metric-card {
+        background: linear-gradient(145deg, #ffffff, #f0f0f0);
+        border-radius: 20px;
+        padding: 25px;
+        margin: 10px;
+        box-shadow: 8px 8px 16px rgba(0,0,0,0.1), -8px -8px 16px rgba(255,255,255,0.7);
+        border: 2px solid rgba(255,255,255,0.5);
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-8px) scale(1.02);
+        box-shadow: 12px 12px 24px rgba(0,0,0,0.15), -12px -12px 24px rgba(255,255,255,0.8);
+    }
+    
+    .metric-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 5px;
+        background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+    }
+    
+    .metric-icon {
+        font-size: 2.5em;
+        margin-bottom: 15px;
+        animation: float 3s ease-in-out infinite;
+    }
+    
+    @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+    }
+    
+    .metric-value {
+        font-size: 2.8em;
+        font-weight: 800;
+        margin: 10px 0;
+        background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .metric-label {
+        font-size: 1.1em;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 5px;
+    }
+    
+    .metric-subtext {
+        font-size: 0.9em;
+        color: #666;
+        opacity: 0.8;
+    }
+    
+    /* Individual metric colors */
+    .metric-speech {
+        --gradient-start: #FF6B6B;
+        --gradient-end: #FF8E53;
+    }
+    
+    .metric-duration {
+        --gradient-start: #4ECDC4;
+        --gradient-end: #44A08D;
+    }
+    
+    .metric-segments {
+        --gradient-start: #FFD166;
+        --gradient-end: #FF9E6D;
+    }
+    
+    .metric-confidence {
+        --gradient-start: #06D6A0;
+        --gradient-end: #118AB2;
+    }
+    
+    /* Pulse animation for important metrics */
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+    }
+    
+    .pulse {
+        animation: pulse 2s infinite;
+    }
+    
+    /* Glowing effect */
+    .glow {
+        box-shadow: 0 0 25px rgba(var(--glow-color), 0.4);
+    }
+    
+    .metric-speech.glow {
+        --glow-color: 255, 107, 107;
+    }
+    
+    .metric-duration.glow {
+        --glow-color: 78, 205, 196;
+    }
+    
+    .metric-segments.glow {
+        --glow-color: 255, 209, 102;
+    }
+    
+    .metric-confidence.glow {
+        --glow-color: 6, 214, 160;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Your EXACT model classes from training
 class BDNN_Head(nn.Module):
     def __init__(self, in_dim=1521, hidden=512):
@@ -212,15 +333,25 @@ class HybridVADAnalyzer:
 # Streamlit UI
 st.set_page_config(page_title="Hybrid VAD Analyzer", page_icon="🎵", layout="wide")
 
-st.title("🎵 Hybrid VAD Analyzer")
-st.markdown("Upload an audio file to detect speech and silence segments")
+# Add colorful header
+st.markdown("""
+<div style="text-align: center; padding: 20px 0; margin-bottom: 30px;">
+    <h1 style="background: linear-gradient(90deg, #FF6B6B, #FFD166, #06D6A0, #118AB2);
+               -webkit-background-clip: text;
+               -webkit-text-fill-color: transparent;
+               font-size: 3em;
+               font-weight: 800;
+               margin: 0;">🎵 Hybrid VAD Analyzer</h1>
+    <p style="color: #666; font-size: 1.2em; margin-top: 10px;">Upload an audio file to detect speech and silence segments</p>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("Settings")
+    st.header("⚙️ Settings")
     threshold = st.slider("Detection Threshold", 0.1, 0.9, 0.5, 0.05)
     min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.1, 0.05)
     
-    st.header("Model Info")
+    st.header("🤖 Model Info")
     st.info("Using Hybrid Model: BDNN + CNN + Meta Classifier")
 
 uploaded_file = st.file_uploader("Choose an audio file", type=['wav', 'mp3', 'm4a', 'flac'])
@@ -235,7 +366,65 @@ if uploaded_file is not None:
             analyzer = HybridVADAnalyzer()
             results = analyzer.predict_vad(tmp_path, threshold, min_duration)
             
-            # Display results
+            # ========== ADD COLORFUL METRICS SECTION ==========
+            st.markdown("## 📊 Analysis Results")
+            st.markdown("---")
+            
+            # Create four columns for the metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            # Calculate speech segments count
+            speech_segments = len([s for s in results['segments'] if s['label'] == 'speech'])
+            
+            # Calculate AI confidence (average of all segments)
+            avg_confidence = np.mean([s['confidence'] for s in results['segments']]) if results['segments'] else 0
+            
+            with col1:
+                st.markdown(f"""
+                <div class="metric-card metric-speech pulse">
+                    <div class="metric-icon">🎤</div>
+                    <div class="metric-label">Speech Ratio</div>
+                    <div class="metric-value">{results['speech_ratio']:.1%}</div>
+                    <div class="metric-subtext">
+                        {results['speech_duration']:.2f}s / {results['total_duration']:.2f}s
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(f"""
+                <div class="metric-card metric-duration">
+                    <div class="metric-icon">⏱️</div>
+                    <div class="metric-label">Audio Duration</div>
+                    <div class="metric-value">{results['total_duration']:.2f}s</div>
+                    <div class="metric-subtext">Total length</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown(f"""
+                <div class="metric-card metric-segments">
+                    <div class="metric-icon">🎯</div>
+                    <div class="metric-label">Speech Segments</div>
+                    <div class="metric-value">{speech_segments}</div>
+                    <div class="metric-subtext">Detected speech parts</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col4:
+                st.markdown(f"""
+                <div class="metric-card metric-confidence glow">
+                    <div class="metric-icon">🤖</div>
+                    <div class="metric-label">AI Confidence</div>
+                    <div class="metric-value">{avg_confidence:.1%}</div>
+                    <div class="metric-subtext">Model accuracy</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Original metrics (kept for compatibility)
+            st.markdown("---")
+            st.markdown("### 📈 Detailed Statistics")
+            
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Speech Ratio", f"{results['speech_ratio']:.1%}")
@@ -245,6 +434,7 @@ if uploaded_file is not None:
                 st.metric("Speech Duration", f"{results['speech_duration']:.2f}s")
             with col4:
                 st.metric("Silence Duration", f"{results['silence_duration']:.2f}s")
+            # ========== END OF COLORFUL METRICS ==========
             
             # Display segments
             st.subheader("📊 Detected Segments")
@@ -426,5 +616,15 @@ else:
         4. **Export** results as JSON or CSV
         """)
 
-st.markdown("---")
-st.markdown("### Powered by Hybrid VAD Model | Built with Streamlit")
+# Colorful footer
+st.markdown("""
+<div style="text-align: center; padding: 30px; margin-top: 50px; 
+            background: linear-gradient(90deg, #FF6B6B, #FFD166, #06D6A0, #118AB2);
+            border-radius: 20px; color: white;">
+    <h3>🚀 Powered by Hybrid VAD Model</h3>
+    <p>BDNN + CNN + Meta Classifier Ensemble | Built with Streamlit</p>
+    <div style="margin-top: 20px; font-size: 1.5em;">
+        ⚡ 🎤 📊 🔥 🚀
+    </div>
+</div>
+""", unsafe_allow_html=True)
