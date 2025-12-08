@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 import pandas as pd
-import io
+from matplotlib.patches import Patch
 
 # Fix for deployment
 os.environ['MPLCONFIGDIR'] = '/tmp/.matplotlib'
@@ -155,39 +155,64 @@ class HybridVADAnalyzer:
         hop_length = 160
         times = librosa.frames_to_time(range(len(final_probs)), sr=sr, hop_length=hop_length)
         
-        # Segment detection
+        # ✅ FIXED: Segment merging logic to match Colab output
         segments = []
-        if len(final_probs) > 0:
-            current_label = "silence" if final_probs[0] < threshold else "speech"
-            start_time = float(times[0])
-            start_idx = 0
+        if len(final_probs) == 0:
+            return {
+                'segments': segments,
+                'speech_ratio': 0,
+                'total_duration': 0,
+                'speech_duration': 0,
+                'silence_duration': 0,
+                'probabilities': final_probs,
+                'times': times,
+                'audio_data': audio_data,
+                'sample_rate': sr
+            }
+        
+        # Create binary speech/silence labels
+        is_speech = final_probs >= threshold
+        
+        # Initialize first segment
+        current_start = 0
+        current_label = "speech" if is_speech[0] else "silence"
+        
+        # Iterate through all frames
+        for i in range(1, len(is_speech)):
+            if is_speech[i] != is_speech[i-1]:
+                # Segment boundary found
+                segment_end = i
+                duration = times[segment_end] - times[current_start]
+                
+                # Only add segment if it meets minimum duration
+                if duration >= min_duration:
+                    # Calculate confidence as mean probability in this segment
+                    segment_probs = final_probs[current_start:segment_end]
+                    confidence = float(np.mean(segment_probs))
+                    
+                    segments.append({
+                        'start': float(times[current_start]),
+                        'end': float(times[segment_end]),
+                        'label': current_label,
+                        'confidence': confidence
+                    })
+                
+                # Start new segment
+                current_start = segment_end
+                current_label = "speech" if is_speech[i] else "silence"
+        
+        # Handle the last segment
+        duration = times[-1] - times[current_start]
+        if duration >= min_duration:
+            segment_probs = final_probs[current_start:]
+            confidence = float(np.mean(segment_probs))
             
-            for i in range(1, len(final_probs)):
-                new_label = "silence" if final_probs[i] < threshold else "speech"
-                if new_label != current_label:
-                    duration = times[i] - start_time
-                    if duration >= min_duration:
-                        confidence = float(np.mean(final_probs[start_idx:i]))
-                        segments.append({
-                            'start': float(start_time),
-                            'end': float(times[i]),
-                            'label': current_label,
-                            'confidence': confidence
-                        })
-                    start_time = times[i]
-                    start_idx = i
-                    current_label = new_label
-            
-            # Final segment
-            duration = times[-1] - start_time
-            if duration >= min_duration:
-                confidence = float(np.mean(final_probs[start_idx:]))
-                segments.append({
-                    'start': float(start_time),
-                    'end': float(times[-1]),
-                    'label': current_label,
-                    'confidence': confidence
-                })
+            segments.append({
+                'start': float(times[current_start]),
+                'end': float(times[-1]),
+                'label': current_label,
+                'confidence': confidence
+            })
         
         # Statistics
         if segments:
@@ -345,7 +370,6 @@ if uploaded_file is not None:
                 ax3.grid(True, alpha=0.3, axis='x')
                 
                 # Add legend
-                from matplotlib.patches import Patch
                 legend_elements = [Patch(facecolor='green', alpha=0.7, label='Speech'),
                                  Patch(facecolor='red', alpha=0.7, label='Silence')]
                 ax3.legend(handles=legend_elements, loc='upper right')
@@ -394,8 +418,6 @@ if uploaded_file is not None:
                         mime="text/csv"
                     )
             
-            
-            
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
             st.error("Please ensure:")
@@ -410,8 +432,6 @@ if uploaded_file is not None:
 else:
     # Show instructions when no file is uploaded
     st.info("👆 Please upload an audio file to begin analysis.")
-    
-    
     
     with st.expander("🎯 How to Use"):
         st.markdown("""
