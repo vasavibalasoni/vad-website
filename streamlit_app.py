@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 import pandas as pd
-from matplotlib.patches import Patch
+import io
 
 # Fix for deployment
 os.environ['MPLCONFIGDIR'] = '/tmp/.matplotlib'
@@ -155,66 +155,41 @@ class HybridVADAnalyzer:
         hop_length = 160
         times = librosa.frames_to_time(range(len(final_probs)), sr=sr, hop_length=hop_length)
         
-        # ✅ FIXED: Segment merging logic to match Colab output
+        # Segment detection
         segments = []
-        if len(final_probs) == 0:
-            return {
-                'segments': segments,
-                'speech_ratio': 0,
-                'total_duration': 0,
-                'speech_duration': 0,
-                'silence_duration': 0,
-                'probabilities': final_probs,
-                'times': times,
-                'audio_data': audio_data,
-                'sample_rate': sr
-            }
-        
-        # Create binary speech/silence labels
-        is_speech = final_probs >= threshold
-        
-        # Initialize first segment
-        current_start = 0
-        current_label = "speech" if is_speech[0] else "silence"
-        
-        # Iterate through all frames
-        for i in range(1, len(is_speech)):
-            if is_speech[i] != is_speech[i-1]:
-                # Segment boundary found
-                segment_end = i
-                duration = times[segment_end] - times[current_start]
-                
-                # Only add segment if it meets minimum duration
-                if duration >= min_duration:
-                    # Calculate confidence as mean probability in this segment
-                    segment_probs = final_probs[current_start:segment_end]
-                    confidence = float(np.mean(segment_probs))
-                    
-                    segments.append({
-                        'start': float(times[current_start]),
-                        'end': float(times[segment_end]),
-                        'label': current_label,
-                        'confidence': confidence
-                    })
-                
-                # Start new segment
-                current_start = segment_end
-                current_label = "speech" if is_speech[i] else "silence"
-        
-        # Handle the last segment
-        duration = times[-1] - times[current_start]
-        if duration >= min_duration:
-            segment_probs = final_probs[current_start:]
-            confidence = float(np.mean(segment_probs))
+        if len(final_probs) > 0:
+            current_label = "silence" if final_probs[0] < threshold else "speech"
+            start_time = float(times[0])
+            start_idx = 0
             
-            segments.append({
-                'start': float(times[current_start]),
-                'end': float(times[-1]),
-                'label': current_label,
-                'confidence': confidence
-            })
+            for i in range(1, len(final_probs)):
+                new_label = "silence" if final_probs[i] < threshold else "speech"
+                if new_label != current_label:
+                    duration = times[i] - start_time
+                    if duration >= min_duration:
+                        confidence = float(np.mean(final_probs[start_idx:i]))
+                        segments.append({
+                            'start': float(start_time),
+                            'end': float(times[i]),
+                            'label': current_label,
+                            'confidence': confidence
+                        })
+                    start_time = times[i]
+                    start_idx = i
+                    current_label = new_label
+            
+            # Final segment
+            duration = times[-1] - start_time
+            if duration >= min_duration:
+                confidence = float(np.mean(final_probs[start_idx:]))
+                segments.append({
+                    'start': float(start_time),
+                    'end': float(times[-1]),
+                    'label': current_label,
+                    'confidence': confidence
+                })
         
-        # Calculate statistics
+        # Statistics
         if segments:
             speech_time = sum(s['end']-s['start'] for s in segments if s['label'] == 'speech')
             total_time = segments[-1]['end']
@@ -238,25 +213,17 @@ class HybridVADAnalyzer:
 st.set_page_config(page_title="Hybrid VAD Analyzer", page_icon="🎵", layout="wide")
 
 st.title("🎵 Hybrid VAD Analyzer")
-st.markdown("Upload an audio file to detect speech and silence segments using advanced AI")
+st.markdown("Upload an audio file to detect speech and silence segments")
 
 with st.sidebar:
     st.header("Settings")
-    threshold = st.slider("Detection Threshold", 0.1, 0.9, 0.5, 0.05,
-                         help="Higher values = more strict speech detection")
-    min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.1, 0.05,
-                           help="Filter out segments shorter than this duration")
+    threshold = st.slider("Detection Threshold", 0.1, 0.9, 0.5, 0.05)
+    min_duration = st.slider("Minimum Segment Duration (s)", 0.05, 0.5, 0.1, 0.05)
     
     st.header("Model Info")
-    st.info("""
-    **Hybrid Model Architecture:**
-    - BDNN (Bidirectional DNN): Temporal context
-    - CNN: Spatial feature extraction  
-    - Meta Classifier: Final fusion
-    """)
+    st.info("Using Hybrid Model: BDNN + CNN + Meta Classifier")
 
-uploaded_file = st.file_uploader("Choose an audio file", type=['wav', 'mp3', 'm4a', 'flac'],
-                                 help="Supported formats: WAV, MP3, M4A, FLAC")
+uploaded_file = st.file_uploader("Choose an audio file", type=['wav', 'mp3', 'm4a', 'flac'])
 
 if uploaded_file is not None:
     with st.spinner("Analyzing audio..."):
@@ -265,43 +232,33 @@ if uploaded_file is not None:
             tmp_path = tmp_file.name
         
         try:
-            # Initialize analyzer
             analyzer = HybridVADAnalyzer()
-            
-            # Show model info in sidebar
-            with st.sidebar:
-                st.success(f"✓ Model loaded: win_ctx={analyzer.win_ctx}, n_feats={analyzer.n_feats}")
-            
-            # Run prediction
             results = analyzer.predict_vad(tmp_path, threshold, min_duration)
             
-            # Display statistics
-            st.subheader("📊 Analysis Results")
+            # Display results
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Speech Ratio", f"{results['speech_ratio']:.1%}",
-                         delta=f"{results['speech_duration']:.1f}s")
+                st.metric("Speech Ratio", f"{results['speech_ratio']:.1%}")
             with col2:
                 st.metric("Total Duration", f"{results['total_duration']:.2f}s")
             with col3:
-                st.metric("Speech Duration", f"{results['speech_duration']:.2f}s",
-                         delta=f"{results['speech_ratio']:.1%}")
+                st.metric("Speech Duration", f"{results['speech_duration']:.2f}s")
             with col4:
                 st.metric("Silence Duration", f"{results['silence_duration']:.2f}s")
             
             # Display segments
-            st.subheader("🔊 Detected Segments")
+            st.subheader("📊 Detected Segments")
             
             if results['segments']:
                 # Create a dataframe for better display
                 segments_data = []
                 for i, seg in enumerate(results['segments']):
                     segments_data.append({
-                        '#': i+1,
+                        'Segment': i+1,
                         'Type': '🎤 SPEECH' if seg['label'] == 'speech' else '🔇 SILENCE',
-                        'Start (s)': f"{seg['start']:.3f}",
-                        'End (s)': f"{seg['end']:.3f}",
-                        'Duration (s)': f"{seg['end']-seg['start']:.3f}",
+                        'Start (s)': f"{seg['start']:.2f}",
+                        'End (s)': f"{seg['end']:.2f}",
+                        'Duration (s)': f"{seg['end']-seg['start']:.2f}",
                         'Confidence': f"{seg['confidence']:.1%}"
                     })
                 
@@ -309,48 +266,40 @@ if uploaded_file is not None:
                 df = pd.DataFrame(segments_data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 
-                # Display segment count
-                speech_count = sum(1 for s in results['segments'] if s['label'] == 'speech')
-                silence_count = sum(1 for s in results['segments'] if s['label'] == 'silence')
-                st.caption(f"Found {speech_count} speech segments and {silence_count} silence segments")
-                
-                # Display detailed segments in expander
-                with st.expander("📝 Detailed Segment View"):
+                # Display detailed segments
+                with st.expander("📝 View Detailed Segment Information"):
                     for i, seg in enumerate(results['segments']):
                         color = "🟢" if seg['label'] == 'speech' else "🔴"
                         st.write(f"{color} **{seg['label'].upper()}** | "
-                                f"Time: `{seg['start']:.3f}s - {seg['end']:.3f}s` | "
-                                f"Duration: `{seg['end']-seg['start']:.3f}s` | "
-                                f"Confidence: `{seg['confidence']:.1%}`")
+                                f"Time: {seg['start']:.2f}s - {seg['end']:.2f}s | "
+                                f"Duration: {seg['end']-seg['start']:.2f}s | "
+                                f"Confidence: {seg['confidence']:.1%}")
             else:
-                st.warning("⚠️ No segments detected with current settings.")
-                st.info("Try: 1) Lowering the threshold 2) Reducing minimum duration 3) Checking audio content")
+                st.warning("No segments detected with current settings. Try lowering the threshold or minimum duration.")
             
             # Visualization
-            st.subheader("📈 Visualizations")
+            st.subheader("📈 Visualization")
             
             # Create tabs for different visualizations
             tab1, tab2, tab3 = st.tabs(["Waveform with Segments", "Probability Plot", "Segment Timeline"])
             
             with tab1:
                 # Waveform with segments
-                fig1, ax1 = plt.subplots(figsize=(12, 4))
-                times_full = np.linspace(0, len(results['audio_data'])/results['sample_rate'], 
-                                       len(results['audio_data']))
-                ax1.plot(times_full, results['audio_data'], alpha=0.7, 
-                        color='blue', linewidth=0.5, label='Audio Waveform')
+                fig1, ax1 = plt.subplots(figsize=(12, 3))
+                times_full = np.linspace(0, len(results['audio_data'])/results['sample_rate'], len(results['audio_data']))
+                ax1.plot(times_full, results['audio_data'], alpha=0.7, color='blue', linewidth=0.5)
                 
-                # Add segments
                 for seg in results['segments']:
                     color = 'green' if seg['label'] == 'speech' else 'red'
-                    ax1.axvspan(seg['start'], seg['end'], color=color, alpha=0.3)
+                    ax1.axvspan(seg['start'], seg['end'], color=color, alpha=0.3, label=seg['label'].capitalize())
                 
-                # Custom legend
-                speech_patch = Patch(facecolor='green', alpha=0.3, label='Speech')
-                silence_patch = Patch(facecolor='red', alpha=0.3, label='Silence')
-                ax1.legend(handles=[speech_patch, silence_patch], loc='upper right')
+                # Remove duplicate labels
+                handles, labels = ax1.get_legend_handles_labels()
+                by_label = dict(zip(labels, handles))
+                if by_label:
+                    ax1.legend(by_label.values(), by_label.keys())
                 
-                ax1.set_title("Audio Waveform with VAD Segments")
+                ax1.set_title("Voice Activity Detection Results")
                 ax1.set_xlabel("Time (s)")
                 ax1.set_ylabel("Amplitude")
                 ax1.grid(True, alpha=0.3)
@@ -358,19 +307,12 @@ if uploaded_file is not None:
             
             with tab2:
                 # Probability plot
-                fig2, ax2 = plt.subplots(figsize=(12, 4))
-                
-                # Plot probability curve
-                ax2.plot(results['times'], results['probabilities'], 'b-', 
-                        alpha=0.7, linewidth=1, label='Speech Probability')
-                
-                # Add threshold line
-                ax2.axhline(y=threshold, color='r', linestyle='--', 
-                          alpha=0.7, linewidth=1.5, label=f'Threshold ({threshold})')
+                fig2, ax2 = plt.subplots(figsize=(12, 3))
+                ax2.plot(results['times'], results['probabilities'], 'b-', alpha=0.7, linewidth=1, label='Speech Probability')
+                ax2.axhline(y=threshold, color='r', linestyle='--', alpha=0.5, label=f'Threshold ({threshold})')
                 
                 # Fill area under curve
-                ax2.fill_between(results['times'], 0, results['probabilities'], 
-                               alpha=0.2, color='blue')
+                ax2.fill_between(results['times'], 0, results['probabilities'], alpha=0.3)
                 
                 # Highlight segments
                 for seg in results['segments']:
@@ -382,21 +324,20 @@ if uploaded_file is not None:
                 ax2.set_title("Speech Probability over Time")
                 ax2.set_xlabel("Time (s)")
                 ax2.set_ylabel("Probability")
-                ax2.set_ylim([-0.05, 1.05])
-                ax2.legend(loc='upper right')
+                ax2.set_ylim([0, 1])
+                ax2.legend()
                 ax2.grid(True, alpha=0.3)
                 st.pyplot(fig2)
             
             with tab3:
                 # Segment timeline visualization
-                fig3, ax3 = plt.subplots(figsize=(12, 3))
+                fig3, ax3 = plt.subplots(figsize=(12, 2))
                 
                 y_pos = 0
                 for seg in results['segments']:
                     color = 'green' if seg['label'] == 'speech' else 'red'
                     ax3.barh(y_pos, seg['end']-seg['start'], left=seg['start'], 
-                            height=0.6, color=color, alpha=0.7, edgecolor='black', 
-                            linewidth=0.5)
+                            height=0.8, color=color, alpha=0.7, edgecolor='black')
                 
                 ax3.set_yticks([])
                 ax3.set_xlabel("Time (s)")
@@ -404,6 +345,7 @@ if uploaded_file is not None:
                 ax3.grid(True, alpha=0.3, axis='x')
                 
                 # Add legend
+                from matplotlib.patches import Patch
                 legend_elements = [Patch(facecolor='green', alpha=0.7, label='Speech'),
                                  Patch(facecolor='red', alpha=0.7, label='Silence')]
                 ax3.legend(handles=legend_elements, loc='upper right')
@@ -415,20 +357,15 @@ if uploaded_file is not None:
             
             # Create JSON for download
             results_json = {
-                'audio_file': uploaded_file.name,
                 'settings': {
                     'threshold': threshold,
-                    'min_duration': min_duration,
-                    'sample_rate': results['sample_rate']
+                    'min_duration': min_duration
                 },
                 'statistics': {
                     'speech_ratio': float(results['speech_ratio']),
                     'total_duration': float(results['total_duration']),
                     'speech_duration': float(results['speech_duration']),
-                    'silence_duration': float(results['silence_duration']),
-                    'num_segments': len(results['segments']),
-                    'num_speech_segments': sum(1 for s in results['segments'] if s['label'] == 'speech'),
-                    'num_silence_segments': sum(1 for s in results['segments'] if s['label'] == 'silence')
+                    'silence_duration': float(results['silence_duration'])
                 },
                 'segments': results['segments']
             }
@@ -441,9 +378,8 @@ if uploaded_file is not None:
                 st.download_button(
                     label="📥 Download Results (JSON)",
                     data=json_str,
-                    file_name=f"vad_results_{uploaded_file.name.split('.')[0]}.json",
-                    mime="application/json",
-                    help="Download analysis results in JSON format"
+                    file_name="vad_results.json",
+                    mime="application/json"
                 )
             
             with col2:
@@ -454,95 +390,41 @@ if uploaded_file is not None:
                     st.download_button(
                         label="📥 Download Results (CSV)",
                         data=csv,
-                        file_name=f"vad_results_{uploaded_file.name.split('.')[0]}.csv",
-                        mime="text/csv",
-                        help="Download segment data in CSV format"
+                        file_name="vad_results.csv",
+                        mime="text/csv"
                     )
             
-            # Debug information
-            with st.expander("🔍 Debug Information"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Model Configuration:**")
-                    st.write(f"- win_ctx: {analyzer.win_ctx}")
-                    st.write(f"- n_feats: {analyzer.n_feats}")
-                    st.write(f"- win_total: {analyzer.win_total}")
-                    st.write(f"- Flat dimension: {analyzer.win_total * analyzer.n_feats}")
-                
-                with col2:
-                    st.write("**Audio Information:**")
-                    st.write(f"- Duration: {len(results['audio_data'])/results['sample_rate']:.2f}s")
-                    st.write(f"- Sample rate: {results['sample_rate']} Hz")
-                    st.write(f"- Samples: {len(results['audio_data']):,}")
-                    st.write(f"- Probability frames: {len(results['probabilities'])}")
-                
-                st.write("**Probability Statistics:**")
-                col3, col4 = st.columns(2)
-                with col3:
-                    st.write(f"- Min: {results['probabilities'].min():.3f}")
-                    st.write(f"- Max: {results['probabilities'].max():.3f}")
-                with col4:
-                    st.write(f"- Mean: {results['probabilities'].mean():.3f}")
-                    st.write(f"- Std: {results['probabilities'].std():.3f}")
-                
-                if st.button("Show first 20 probabilities"):
-                    st.write(results['probabilities'][:20])
             
-        except FileNotFoundError as e:
-            st.error(f"Model files not found: {str(e)}")
-            st.error("""
-            Please ensure you have the following files in 'hybrid_model/' directory:
-            1. hybrid_config.json
-            2. scaler_ctx.joblib  
-            3. bdnn.pth
-            4. cnn.pth
-            5. meta.pth
-            """)
+            
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
-            import traceback
-            with st.expander("Technical Details"):
-                st.code(traceback.format_exc())
+            st.error("Please ensure:")
+            st.error("1. Your model files are in the 'hybrid_model' directory")
+            st.error("2. The directory contains: hybrid_config.json, scaler_ctx.joblib, bdnn.pth, cnn.pth, meta.pth")
         finally:
-            # Clean up temporary file
+            # Clean up
             try:
                 os.unlink(tmp_path)
             except:
                 pass
 else:
     # Show instructions when no file is uploaded
-    st.info("👆 **Upload an audio file to begin analysis**")
+    st.info("👆 Please upload an audio file to begin analysis.")
+    
+    
     
     with st.expander("🎯 How to Use"):
         st.markdown("""
-        ### **Quick Start Guide:**
-        
-        1. **Upload Audio**
-           - Click "Browse files" or drag & drop
-           - Supported formats: WAV, MP3, M4A, FLAC
-        
-        2. **Adjust Settings** (Optional)
-           - **Detection Threshold**: Controls sensitivity (0.1-0.9)
-             - Lower = more speech detected (but may include noise)
-             - Higher = stricter speech detection
-           - **Minimum Duration**: Ignore short segments (<0.05-0.5s)
-        
-        3. **View Results**
-           - **Statistics**: Speech ratio, durations
-           - **Segment Table**: All detected segments
-           - **Visualizations**: Waveform, probability plots
-        
-        4. **Export Data**
-           - Download as JSON (full analysis)
-           - Download as CSV (segment data only)
-        
-        ### **Tips for Best Results:**
-        - Use clear speech recordings
-        - Start with default settings (threshold=0.5, min_duration=0.1s)
-        - Adjust threshold based on audio quality
-        - For noisy audio, increase threshold slightly
+        1. **Upload** an audio file (WAV, MP3, M4A, or FLAC)
+        2. **Adjust settings** in the sidebar:
+           - **Detection Threshold**: Higher = more strict speech detection
+           - **Minimum Duration**: Filter out very short segments
+        3. **View results**:
+           - Statistics at the top
+           - Segment table with timestamps
+           - Visualizations of the waveform
+        4. **Export** results as JSON or CSV
         """)
 
 st.markdown("---")
 st.markdown("### 🚀 Powered by Hybrid VAD Model | Built with Streamlit")
-st.caption("Voice Activity Detection using BDNN + CNN + Meta Classifier | For academic/research use")
