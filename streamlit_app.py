@@ -394,22 +394,7 @@ if uploaded_file is not None:
                         mime="text/csv"
                     )
             
-            # Debug information (collapsed by default)
-            with st.expander("🔍 Debug Information"):
-                st.write(f"Number of frames: {len(results['probabilities'])}")
-                st.write(f"Probability range: {results['probabilities'].min():.3f} to {results['probabilities'].max():.3f}")
-                st.write(f"Mean probability: {results['probabilities'].mean():.3f}")
-                st.write(f"Sample audio length: {len(results['audio_data'])/results['sample_rate']:.2f}s")
-                
-                # Show first few probabilities
-                st.write("First 10 probabilities:")
-                st.write(results['probabilities'][:10])
-                
-                # Show model configuration
-                st.write("Model configuration:")
-                st.write(f"- win_ctx: {analyzer.win_ctx}")
-                st.write(f"- n_feats: {analyzer.n_feats}")
-                st.write(f"- win_total: {analyzer.win_total}")
+            
             
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
